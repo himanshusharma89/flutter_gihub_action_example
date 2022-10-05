@@ -6,7 +6,9 @@ name: CI/CD
 on:
   # Triggers the workflow on push or pull request events but only for the "master" branch
   push:
-    branches: [ "master" ]
+    branches: 
+    - "master"
+    - "deployment"
   pull_request:
     branches: [ "master" ]
 
@@ -15,8 +17,32 @@ on:
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
+  version:
+    name: Create version number
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with: 
+          fetch-depth: 0
+      - name: Install GitVersion
+        uses: gittools/actions/gitversion/setup@v0.9.7
+        with:
+          versionSpec: "5.x"
+      - name: Use GitVersion
+        id: gitversion
+        uses: gittools/actions/gitversion/execute@v0.9.7
+      - name: Create version.txt with nuGetVersion
+        run: echo ${{ steps.gitversion.outputs.nuGetVersion  }} > version.txt
+      - name: Upload version.txt
+        uses: actions/upload-artifact@v2
+        with:
+          name: gitversion
+          path: version.txt
+
   # This workflow contains a single job called "build"
   build:
+    name: Create Android Build
+    needs: version
     # The type of runner that the job will run on
     runs-on: ubuntu-latest
 
@@ -37,7 +63,24 @@ jobs:
           flutter-version: "3.0.0"
           channel: 'stable'
           cache: true
-
+          
+      - name: Get version.txt
+        uses: actions/download-artifact@v2
+        with:
+          name: gitversion
+      - name: Create new file without newline char from version.txt
+        run: tr -d '\n' < version.txt > version1.txt
+      - name: Read version
+        id: version
+        uses: juliangruber/read-file-action@v1
+        with:
+          path: version1.txt
+      - name: Update version in YAML
+        run: sed -i 's/99.99.99+99/${{ steps.version.outputs.content }}+${{ github.run_number }}/g' pubspec.yaml
+      - name: Update KeyStore password in gradle properties
+        run: sed -i 's/#{KEYSTORE_PASS}#/${{ secrets.KEYSTORE_PASS }}/g' android/key.properties
+      - name: Update KeyStore key password in gradle properties
+        run: sed -i 's/#{KEYSTORE_KEY_PASS}#/${{ secrets.KEYSTORE_KEY_PASS }}/g' android/key.properties
       # Runs a single command using the runners shell
       - name: Get dependencies
         run: flutter pub get
@@ -53,39 +96,23 @@ jobs:
           path: |
             ./build/app/outputs/apk/release/*.apk
             ./build/app/outputs/bundle/release/app-release.aab
-      
-      - name: Start Web Release Build
-        run: flutter build web --release
-
-      - name: Upload Web Build Files
-        uses: actions/upload-artifact@v2
-        with:
-          name: web-release
-          path: ./build/web
 
   deploy:
+    name: Deploy Android Build
     needs: build
     runs-on: ubuntu-latest
 
     steps:
-    - name: Download Android Release
+    - uses: actions/checkout@v1
+    - name: Get appbundle from artifacts
       uses: actions/download-artifact@v2
       with:
-        name: android-release
-
-    - name: Deploy on GitHub
-      uses: ncipollo/release-action@v1
+        name: appbundle
+    - name: Release app to internal track
+      uses: r0adkll/upload-google-play@v1
       with:
-        artifacts: android-release
-          # Get token to create release from secret (Token needs permission to do so)
-        token: ${{ secrets.GH_TOKEN }}
-
-    - name: Download Web Release
-      uses: actions/download-artifact@v2
-      with:
-        name: web-release
-    
-    - name: Deploy to gh-pages
-      uses: peaceiris/actions-gh-pages@v3
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
+        serviceAccountJsonPlainText: ${{ secrets.PLAYSTORE_ACCOUNT_KEY }}
+        packageName: com.app.package_name
+        releaseFiles: app-release.aab
+        track: alpha
+        status: completed
