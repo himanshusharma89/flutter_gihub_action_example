@@ -1,14 +1,12 @@
 # This is a basic workflow  to help you start building your flutter app and release it on GitHub on certain events.
 
-name: CI/CD
+name: Android Release
 
 # Controls when the workflow will run
 on:
   # Triggers the workflow on push or pull request events but only for the "master" branch
   push:
-    branches: 
-    - "master"
-    - "deployment"
+    branches: [ "master" ]
   pull_request:
     branches: [ "master" ]
 
@@ -17,13 +15,16 @@ on:
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
+  # This workflow contains three jobs that runs sequentially.
+  # Fist job being creation a version number for your Android Release using GitVersion
   version:
     name: Create version number
+    # The type of runner that the job will run on
     runs-on: ubuntu-latest
+    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v3
-        with: 
-          fetch-depth: 0
       - name: Install GitVersion
         uses: gittools/actions/gitversion/setup@v0.9.7
         with:
@@ -39,18 +40,15 @@ jobs:
           name: gitversion
           path: version.txt
 
-  # This workflow contains a single job called "build"
+  # Second job being building the Android Release
   build:
     name: Create Android Build
+    # This jobs needs the First job to be completed to execute
     needs: version
-    # The type of runner that the job will run on
     runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v3
-          
+      # Downloading the version file upload in first job.    
       - name: Get version.txt
         uses: actions/download-artifact@v2
         with:
@@ -62,28 +60,33 @@ jobs:
         uses: juliangruber/read-file-action@v1
         with:
           path: version1.txt
+      # Runs a single command using the runners shell
       - name: Update version in YAML
         run: sed -i 's/99.99.99+99/${{ steps.version.outputs.content }}+${{ github.run_number }}/g' pubspec.yaml
-      
+      # Here decoding the base64 encoded keystore value saved as a secret.
       - name: Download Android keystore
         id: android_keystore
         uses: timheuer/base64-to-file@v1.0.3
         with:
           fileName: upload-keystore.jks
           encodedString: ${{ secrets.KEYSTORE_BASE64 }}
-      
+      # Creating key.properties
       - name: Create key.properties
         run: |
           echo "storeFile=${{ steps.android_keystore.outputs.filePath }}" > android/key.properties
           echo "storePassword=${{ secrets.STORE_PASSWORD }}" >> android/key.properties
           echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> android/key.properties
           echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> android/key.properties
-
+      # Setting up java
       - uses: actions/setup-java@v3
         with:
+          #
           distribution: 'zulu'
+          #
           java-version: "12.x"
-          
+          #
+          cache: gradle
+      # Setting up flutter
       - uses: subosito/flutter-action@v2
         with:
           # Adjust to the flutter version you are working with
@@ -91,13 +94,11 @@ jobs:
           channel: 'stable'
           cache: true
       
-      # Runs a single command using the runners shell
       - name: Get dependencies
         run: flutter pub get
 
-      # Runs a set of commands using the runners shell
       - name: Start Android Release Build
-        run: flutter build apk --release --split-per-abi && flutter build appbundle
+        run: flutter build appbundle
 
       - name: Upload Android Release
         uses: actions/upload-artifact@v2
